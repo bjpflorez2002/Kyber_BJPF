@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# large generated trace output
+NTT_n256_full_trace_output.txt
