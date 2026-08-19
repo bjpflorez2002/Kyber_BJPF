@@ -1,9 +1,8 @@
-# macOS
-.DS_Store
+# ignore everything in this folder by default
+*
 
-# Python
-__pycache__/
-*.pyc
-
-# large generated trace output
-NTT_n256_full_trace_output.txt
+# except the files that belong in the repo
+!.gitignore
+!README.md
+!Kyber-1024-ML-KEM_FIPS-203_V5.py
+!compression_V4.py
