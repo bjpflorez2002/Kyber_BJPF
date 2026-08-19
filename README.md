@@ -5,8 +5,21 @@ encapsulation mechanism standardised by NIST in **FIPS 203**, built as part of a
 MSc dissertation.
 
 Everything is written from first principles — no cryptographic libraries are used
-for any part of the KEM itself. Only Python's built-in `hashlib` (for SHA-3 and
-SHAKE) and `secrets` (for randomness) are relied upon.
+for any part of the KEM. Only Python's built-in `hashlib` (SHA-3 and SHAKE) and
+`secrets` (randomness) are relied upon.
+
+## Files
+
+| File | Contents |
+|---|---|
+| `Kyber-1024-ML-KEM_FIPS-203_V5.py` | the complete implementation |
+| `compression_V4.py` | ciphertext compression, developed and tested standalone |
+
+Run the main file with:
+
+```bash
+python3 "Kyber-1024-ML-KEM_FIPS-203_V5.py"
+```
 
 ## Parameters
 
@@ -26,11 +39,9 @@ Key and ciphertext sizes match **FIPS 203 Table 3** exactly:
 - ciphertext: **1568 bytes**
 - shared secret: **32 bytes**
 
-## Main file
+## Structure
 
-**`Kyber-1024-ML-KEM_FIPS-203_V5.py`** — the complete implementation.
-
-It is laid out as a setup section followed by four acts:
+The main file is laid out as a setup section followed by four acts:
 
 - **Setup** — polynomial arithmetic, the NTT toolkit, the CBD table, rejection
   sampling, byte encoding/decoding, and compression
@@ -38,12 +49,6 @@ It is laid out as a setup section followed by four acts:
 - **Act 2** — Encapsulate
 - **Act 3** — Decapsulate, including the re-encryption check and implicit rejection
 - **Act 4** — arranging the resulting shared secret into the AES-256 key layout
-
-Run it with:
-
-```bash
-python3 "Kyber-1024-ML-KEM_FIPS-203_V5.py"
-```
 
 ## What is implemented
 
@@ -56,26 +61,6 @@ python3 "Kyber-1024-ML-KEM_FIPS-203_V5.py"
 - The Fujisaki–Okamoto transform: re-encryption check with **implicit rejection**
   (a private fallback value produces a decoy key on failure, so rejection is
   indistinguishable from success)
-
-## Development history
-
-Earlier files are kept to show how the implementation was built up:
-
-| File | Stage |
-|---|---|
-| `Hashing_kyber_CBD_V2.py` | schoolbook multiplication, seeded generation |
-| `Kyber-1024_NTT_V3.py` | NTT multiplication swapped in |
-| `compression_V4.py` | compression developed and tested standalone |
-| `Kyber-1024-ML-KEM_FIPS-203_V5.py` | **current** — compression integrated |
-
-Supporting standalone tests: `NTT_Multiplication_v2.py`, `byte_encode_test.py`,
-`NTT_n256_full_trace.py`.
-
-## Documentation
-
-The `build_*_pdf.py` scripts generate explanatory PDFs covering the setup section,
-each act, and the NTT in detail — including worked hand-calculations at both a
-reduced scale (n=8) and real scale (n=256).
 
 ## Known simplifications
 
