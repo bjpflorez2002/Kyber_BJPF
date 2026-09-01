@@ -2,7 +2,7 @@ import random
 import hashlib
 import secrets
 
-print("=== Setup: tools and lookup tables, nothing happens yet ===")
+print("=== Act 0: Setup: tools and lookup tables, nothing happens yet ===")
 print()
 
 # n - how many coefficients each polynomial has, so the highest degree
@@ -158,10 +158,23 @@ def c_hat_maker(f_hat, g_hat):
 
 # ntt_multiply - the NTT pipeline bundled into one drop-in replacement for
 # poly_mult. same job, same answer, faster route.
+# only correct when BOTH f and g are ordinary/plain polynomials that have
+# never been transformed - it hat_maker's both sides before multiplying.
 def ntt_multiply(f, g):
     f_hat = hat_maker(f)
     g_hat = hat_maker(g)
     c_hat = c_hat_maker(f_hat, g_hat)
+    return NTT_final(c_hat)
+
+
+# matrix_multiply - same as ntt_multiply but only hat_makers the vector
+# side, not both sides. use this whenever one side is a cell of A (or A_t) -
+# A comes out of poly_generator_from_seed already hatted, so running it
+# through ntt_multiply hat_makers it a second time and silently gives the
+# wrong answer. found this checking against NIST's official test vectors.
+def matrix_multiply(a_cell, vector_poly):
+    vector_hat = hat_maker(vector_poly)
+    c_hat = c_hat_maker(a_cell, vector_hat)
     return NTT_final(c_hat)
 
 
@@ -620,11 +633,15 @@ print("length of rho in bytes =", len(rho))
 
 # A - the k x k matrix. built by tagging rho with each cells row/col
 # and running it through poly_generator_from_seed, not random.randint
+# note: fips 203 tags each cell as rho+col+row, not row+col - these were
+# swapped. found this checking against NIST's official test vectors; it
+# stayed invisible before because bob and alice both built A the same
+# (wrong) way, so they always agreed with each other regardless
 A = []
 for row_num in range(k):
     row = []
     for col_num in range(k):
-        cell_seed = rho + bytes([row_num, col_num])
+        cell_seed = rho + bytes([col_num, row_num])
         poly = poly_generator_from_seed(cell_seed)
         row.append(poly)
     A.append(row)
@@ -659,13 +676,14 @@ print("S =", S)
 print("e =", e)
 
 
-# b = A.S + e, same as always (mod q, mod x^n+1) - using ntt_multiply
+# b = A.S + e, same as always (mod q, mod x^n+1) - using matrix_multiply
+# since row[i] is a cell of A (see the note above matrix_multiply)
 b = []
 for row_num in range(k):
     row = A[row_num]
     dot_product = [0] * n
     for i in range(k):
-        dot_product = poly_add(dot_product, ntt_multiply(row[i], S[i]))
+        dot_product = poly_add(dot_product, matrix_multiply(row[i], S[i]))
     b.append(poly_add(dot_product, e[row_num]))
 
 print()
@@ -685,6 +703,17 @@ surprise_tool_to_help_us_later = hashlib.sha3_256(combined_bytes).digest()
 
 print()
 print("surprise_tool_to_help_us_later, aka H(ek) =", surprise_tool_to_help_us_later.hex())
+
+print()
+print("--- end of Act 1 ---")
+print("bob made: rho, A, sigma, S, e, b, zed, H(ek)")
+print("  rho, sigma, zed -> random 32-byte seeds")
+print("  A -> expanded from rho (rejection sampling)")
+print("  S, e -> sampled from sigma (CBD table)")
+print("  b -> A.S + e (NTT)")
+print("  H(ek) -> hash of (rho, b)")
+print("bob transmits: (rho, b) only - this is his public key, everything else stays with him")
+print("(rho, b) =", rho.hex(), "|", len(b), "polys")
 
 
 
@@ -709,19 +738,21 @@ print()
 print("=== Act 2: Alice / Encapsulate ===")
 
 # Alice_A - alice rebuilds A herself from rho. she never actually gets the
-# matrix sent to her, just (rho, b) - same expansion bob used to build his A
+# matrix sent to her, just (rho, b) - same expansion bob used to build his A.
+# same rho + col + row tag order as bob's build above, for the same reason
 Alice_A = []
 for row_num in range(k):
     row = []
     for col_num in range(k):
-        cell_seed = rho + bytes([row_num, col_num])
+        cell_seed = rho + bytes([col_num, row_num])
         poly = poly_generator_from_seed(cell_seed)
         row.append(poly)
     Alice_A.append(row)
 
-print()
-print("alice rebuilt A herself, does it match bobs A:", Alice_A == A)
-
+# no check printed here on purpose - in the real protocol alice has no way
+# to verify Alice_A against bobs A, she never sees bobs A to compare against,
+# she just trusts her own rebuild from rho. this only ever looked checkable
+# because bob's A happens to sit in the same script's memory
 
 # Alice_HEK - alice works out H(ek) herself from the (rho, b) she got.
 # same hash bob already computed and stored, she's just redoing it on her side.
@@ -730,7 +761,9 @@ Alice_b_encoded = b"".join(byte_encode(poly, 12) for poly in b)
 Alice_combined_bytes = rho + Alice_b_encoded
 Alice_HEK = hashlib.sha3_256(Alice_combined_bytes).digest()
 
-print("does alice_hek match what bob already has:", Alice_HEK == surprise_tool_to_help_us_later)
+# same reason as Alice_A above - no check printed here. alice never sees
+# bobs stored surprise_tool_to_help_us_later in the real protocol either,
+# so theres nothing she could actually compare her own Alice_HEK against
 
 
 # m - alices actual message, n random bits, one per coefficient. using
@@ -752,7 +785,9 @@ r_coins = g_output[32:64]
 
 print()
 print("K, the real shared secret, saving this for later =", K.hex())
-
+print(g_output.hex())
+print(K.hex())
+print(r_coins.hex())
 
 # r, e_one, e_two - same one-seed-plus-position trick we used for S/e.
 # r takes positions 0..k-1, e_one carries on with k..2k-1, e_two gets position 2k
@@ -799,13 +834,13 @@ for col_num in range(k):
 # b_t - literally just b, a vector transpose is a no-op
 b_t = b
 
-# u = A_t x r + e_one - using ntt_multiply
+# u = A_t x r + e_one - matrix_multiply again, row[i] is a cell of A_t
 u = []
 for row_num in range(k):
     row = A_t[row_num]
     dot_product = [0] * n
     for i in range(k):
-        dot_product = poly_add(dot_product, ntt_multiply(row[i], r[i]))
+        dot_product = poly_add(dot_product, matrix_multiply(row[i], r[i]))
     u.append(poly_add(dot_product, e_one[row_num]))
 
 # v = b_t . r + e_two + m_encoded - using ntt_multiply
@@ -829,6 +864,19 @@ print("c, the real ciphertext =", len(c), "bytes")
 print("(u and v raw would have been", 384 * k + 384, "bytes, so compression saved us a fair bit)")
 print()
 print("alice sends c over to bob")
+
+print()
+print("--- end of Act 2 ---")
+print("alice made: Alice_A, Alice_HEK, m, K, r_coins, r, e_one, e_two, u, v, c")
+print("  Alice_A -> rebuilt from rho (same rejection sampling bob used)")
+print("  Alice_HEK -> hash of (rho, b), same process bob used")
+print("  m -> random bits")
+print("  K, r_coins -> split from hash of (m + Alice_HEK)")
+print("  r, e_one, e_two -> sampled from r_coins (CBD table)")
+print("  u, v -> built from Alice_A/b, r, e_one/e_two, m_encoded (NTT)")
+print("  c -> u and v compressed and packed together")
+print("alice transmits: c only - K stays with her, nothing else ever leaves her side and from here, she can make her AES start key from her side")
+print("c =", c.hex())
 
 
 
@@ -857,9 +905,9 @@ print("=== Act 3: Bob / Decapsulate ===")
 # thats fine, the message still decodes - thats the whole point of compression
 u_received, v_received = ciphertext_opener(c)
 
-print()
-print("bob opened c - are his u/v identical to alices originals:", u_received == u and v_received == v)
-print("(expected False - compression is lossy, hes got close-enough versions)")
+# no check printed here either - bob never sees alices original u and v in
+# the real protocol, only the compressed c, so theres nothing real to
+# compare u_received/v_received against
 
 
 # step 1 - bob works out m_recovered from the u and v he opened, using his
@@ -880,8 +928,10 @@ for i in range(n):
     else:
         m_recovered.append(1)
 
-print()
-print("does m_recovered match alices m:", m_recovered == m)
+# no check printed here either - m is alices private randomness, never
+# sent to bob in any form, so bob has nothing real to compare
+# m_recovered against. all he can do is carry on and let the re-encryption
+# check further down be the real test of whether he recovered it correctly
 
 
 # step 2 - bob re-hashes (m_recovered + H(ek)), but reuses his already-
@@ -931,12 +981,13 @@ for col_num in range(k):
 
 b_t_bob = b
 
+# using matrix_multiply again, row[i] is a cell of A_t_bob
 u_prime = []
 for row_num in range(k):
     row = A_t_bob[row_num]
     dot_product = [0] * n
     for i in range(k):
-        dot_product = poly_add(dot_product, ntt_multiply(row[i], r_prime[i]))
+        dot_product = poly_add(dot_product, matrix_multiply(row[i], r_prime[i]))
     u_prime.append(poly_add(dot_product, e_one_prime[row_num]))
 
 dot_product = [0] * n
@@ -961,21 +1012,48 @@ ciphertext_matches = (c_prime == c)
 print("does bobs rebuilt c_prime match the c alice sent:", ciphertext_matches)
 print()
 
+# found a bug here - i originally only built the fallback key INSIDE the
+# else branch, meaning the "everything is fine" path skipped a step the
+# "something is wrong" path had to do. that's exactly the kind of timing
+# difference zed is supposed to prevent in the first place, even though it
+# turned out to be tiny in practice (the fallback hash is about 3
+# microseconds against a ~10,000 microsecond decapsulation, so ~0.03% of
+# the total). fips 203 says to build the fallback EVERY time, pass or
+# fail, and only decide afterward whether to actually use it - so now it's
+# built unconditionally, before the check, and just gets thrown away
+# unused on the success path instead of never being made at all
+imposter_protocol = zed + c
+K_fallback = hashlib.shake_256(imposter_protocol).digest(32)
+
 if ciphertext_matches:
     K_final = K_prime
     print("ciphertext check passed, K_prime is now the confirmed shared secret")
 else:
-    # imposter_protocol - glue zed and the ciphertext together and hash them.
-    # this becomes K_final instead, so a rejected message still produces a
-    # normal-looking 32-byte key, same as the real path would.
-    # c is already real bytes now so it just gets stuck straight on the end
-    imposter_protocol = zed + c
-    K_final = hashlib.shake_256(imposter_protocol).digest(32)
+    K_final = K_fallback
     print("ciphertext check failed, using zed to build a fallback K_final instead")
 
 print()
 print("K_final =", K_final.hex() if K_final else None)
-print("does this match alices K:", K_final == K if K_final else False)
+
+# no check printed here either - and this one matters most of the three.
+# in the real protocol bob and alice NEVER compare their keys against each
+# other directly - thats the whole trick of the scheme, they end up
+# holding matching keys without ever putting them side by side to check.
+# if they could compare K values directly they wouldnt have needed a KEM
+# in the first place
+
+print()
+print("--- end of Act 3 ---")
+print("bob made: u_received, v_received, m_recovered, K_prime, r_coins_prime,")
+print("          r_prime, e_one_prime, e_two_prime, u_prime, v_prime, c_prime, K_final")
+print("  u_received, v_received -> unpacked and decompressed from c")
+print("  m_recovered -> decoded using bobs private S")
+print("  K_prime, r_coins_prime -> split from hash of (m_recovered + H(ek))")
+print("  r_prime, e_one_prime, e_two_prime -> sampled from r_coins_prime (CBD table)")
+print("  u_prime, v_prime -> rebuilt using bobs own A/b (NTT)")
+print("  c_prime -> u_prime and v_prime compressed and packed together")
+print("  K_final -> K_prime if c_prime matches c, otherwise the zed-based fallback")
+print("bob transmits: NOTHING - decapsulation replies to nobody, K_final just stays with him")
 
 
 
@@ -1013,4 +1091,5 @@ print()
 print("aes-256 starting key matrix, 4 rows by 8 columns:")
 for row in aes_key_matrix:
     print(["%02x" % b for b in row])
-    
+
+
