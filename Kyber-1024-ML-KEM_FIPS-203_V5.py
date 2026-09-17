@@ -1,5 +1,6 @@
 import random
 import hashlib
+import hmac
 import secrets
 
 print("=== Act 0: Setup: tools and lookup tables, nothing happens yet ===")
@@ -1007,7 +1008,12 @@ v_prime = poly_add(poly_add(dot_product, e_two_prime), m_recovered_encoded)
 # an honest message gives byte-for-byte identical ciphertexts every time
 c_prime = ciphertext_maker(u_prime, v_prime)
 
-ciphertext_matches = (c_prime == c)
+# using hmac.compare_digest instead of == here for the same reason zed/K_fallback
+# get built unconditionally above - a plain == on bytes can bail out the moment it
+# hits the first mismatching byte, so how MANY leading bytes matched leaks through
+# timing. compare_digest always takes the same time regardless of where (or if) a
+# mismatch happens, so a bad ciphertext can't be probed byte-by-byte this way.
+ciphertext_matches = hmac.compare_digest(c_prime, c)
 
 print("does bobs rebuilt c_prime match the c alice sent:", ciphertext_matches)
 print()
